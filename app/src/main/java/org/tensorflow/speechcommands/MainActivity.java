@@ -37,12 +37,16 @@ import static java.lang.Math.min;
 
 public class MainActivity extends AppCompatActivity {
 
-    private static final int SAMPLE_RATE = 20000;
-    private static final int SAMPLE_DURATION_MS = 1500;
+    private static final int SAMPLE_RATE = 16000;
+    private static final int SAMPLE_DURATION_MS = 2000;
     private static final int RECORDING_LENGTH = (int) (SAMPLE_RATE * SAMPLE_DURATION_MS / 1000);
-    private static final long AVERAGE_WINDOW_DURATION_MS = 1000;
-    private static String LABEL_FILENAME = "file:///android_asset/conv_labels.txt";
-    private static String MODEL_FILENAME = "file:///android_asset/conv_frozen.pb";
+    private static final long AVERAGE_WINDOW_DURATION_MS = 500;
+    private static float DETECTION_THRESHOLD=0.70f;
+    private static int SUPPRESSION_MS = 1500;
+    private static int MINIMUM_COUNT = 3;
+    private static long MINIMUM_TIME_BETWEEN_SAMPLES_MS = 30;
+    private static String LABEL_FILENAME = "file:///android_asset/low_latency_conv_labels.txt";
+    private static String MODEL_FILENAME = "file:///android_asset/conv_v1_frozen.pb";
     private static String INPUT_DATA_NAME = "decoded_sample_data:0";
     private static String SAMPLE_RATE_NAME = "decoded_sample_data:1";
     private static String OUTPUT_SCORES_NAME = "labels_softmax";
@@ -69,6 +73,7 @@ public class MainActivity extends AppCompatActivity {
         public long mCaptureTime;
     }
     private ArrayDeque<RecognitionResult> mRecognitionResults = new ArrayDeque<>();
+    private RecognizeCommands mRecognizeCommands = null;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -101,6 +106,9 @@ public class MainActivity extends AppCompatActivity {
         } catch (IOException e) {
             throw new RuntimeException("Problem reading label file!" , e);
         }
+
+        mRecognizeCommands = new RecognizeCommands(mLabels, AVERAGE_WINDOW_DURATION_MS,
+                DETECTION_THRESHOLD, SUPPRESSION_MS, MINIMUM_COUNT, MINIMUM_TIME_BETWEEN_SAMPLES_MS);
 
         mInferenceInterface = new TensorFlowInferenceInterface(getAssets(), MODEL_FILENAME);
 
@@ -259,52 +267,67 @@ public class MainActivity extends AppCompatActivity {
             mInferenceInterface.fetch(OUTPUT_SCORES_NAME, outputScores);
 
             long currentTime = System.currentTimeMillis();
-            RecognitionResult recognitionResult = new RecognitionResult();
-            for (int i = 0; i < mLabels.size(); ++i) {
-                recognitionResult.mResults.add(outputScores[i]);
-            }
-            recognitionResult.mCaptureTime = currentTime;
-            mRecognitionResults.addFirst(recognitionResult);
+            String localLabelOutput;
+            String localLabelOnly;
+            if (false) {
+                RecognitionResult recognitionResult = new RecognitionResult();
+                for (int i = 0; i < mLabels.size(); ++i) {
+                    recognitionResult.mResults.add(outputScores[i]);
+                }
+                recognitionResult.mCaptureTime = currentTime;
+                mRecognitionResults.addFirst(recognitionResult);
 
-            while (true) {
-                RecognitionResult oldResult = mRecognitionResults.peekLast();
-                long age = currentTime - oldResult.mCaptureTime;
-                if (age > AVERAGE_WINDOW_DURATION_MS) {
-                    mRecognitionResults.removeLast();
+                while (true) {
+                    RecognitionResult oldResult = mRecognitionResults.peekLast();
+                    long age = currentTime - oldResult.mCaptureTime;
+                    if (age > AVERAGE_WINDOW_DURATION_MS) {
+                        mRecognitionResults.removeLast();
+                    } else {
+                        break;
+                    }
+                }
+
+                ArrayList<Float> averageScores = new ArrayList<Float>();
+                for (int i = 0; i < mLabels.size(); ++i) {
+                    averageScores.add(0.0f);
+                }
+                for (Iterator<RecognitionResult> itr = mRecognitionResults.iterator(); itr.hasNext(); ) {
+                    RecognitionResult result = itr.next();
+                    for (int i = 0; i < result.mResults.size(); ++i) {
+                        float oldAverage = averageScores.get(i);
+                        averageScores.set(i, oldAverage + result.mResults.get(i) / mRecognitionResults.size());
+                    }
+                }
+
+                float topScore = 0.0f;
+                String topLabel = "";
+                for (int i = 0; i < mLabels.size(); ++i) {
+                    if (averageScores.get(i) > topScore) {
+                        topScore = averageScores.get(i);
+                        topLabel = mLabels.get(i);
+                    }
+                }
+                localLabelOutput = topLabel + ":" + topScore;
+                localLabelOnly = topLabel;
+            } else {
+                RecognizeCommands.RecognitionResult result = mRecognizeCommands.processLatestResults(outputScores, currentTime);
+                if (result.mIsNewCommand) {
+                    localLabelOutput = result.mFoundCommand + ":" + result.mScore;
+                    localLabelOnly = result.mFoundCommand;
                 } else {
-                    break;
+                    localLabelOutput = result.mFoundCommand + ":" + result.mScore;
+                    localLabelOnly = "_silence_";
                 }
             }
-
-            ArrayList<Float> averageScores = new ArrayList<Float>();
-            for (int i = 0; i < mLabels.size(); ++i) {
-                averageScores.add(0.0f);
-            }
-            for(Iterator<RecognitionResult> itr = mRecognitionResults.iterator(); itr.hasNext();)  {
-                RecognitionResult result = itr.next();
-                for (int i = 0; i < result.mResults.size(); ++i) {
-                    float oldAverage = averageScores.get(i);
-                    averageScores.set(i, oldAverage + result.mResults.get(i) / mRecognitionResults.size());
-                }
-            }
-
-            float topScore = 0.0f;
-            String topLabel = "";
-            for (int i = 0; i < mLabels.size(); ++i) {
-                if (averageScores.get(i) > topScore) {
-                    topScore = averageScores.get(i);
-                    topLabel = mLabels.get(i);
-                }
-            }
-            final String labelOutput = topLabel + ":" + topScore;
-            final String labelOnly = topLabel;
+            final String labelOutput = localLabelOutput;
+            final String labelOnly = localLabelOnly;
             //Log.v(LOG_TAG, labelOutput);
             runOnUiThread(new Runnable() {
                 @Override
                 public void run() {
                     mInfo.setText(labelOutput);
                     String oldCurrent = mCurrentCommand.getText().toString();
-                    if ((labelOnly.charAt(0) != '_') && (oldCurrent != labelOnly)) {
+                    if ((labelOnly.charAt(0) != '_') && (!oldCurrent.equals(labelOnly))) {
                         mCurrentCommand.setText(labelOnly);
                         mPreviousCommand.setText(oldCurrent);
                     }
