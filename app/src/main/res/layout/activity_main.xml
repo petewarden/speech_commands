@@ -9,36 +9,13 @@
     <TextView
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:text="Hello World!"
+        android:text=""
         android:id="@+id/textView"
         android:textAlignment="center"
-        app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintBottom_toBottomOf="@+id/list_view"
         app:layout_constraintLeft_toLeftOf="parent"
         app:layout_constraintRight_toRightOf="parent"
-        app:layout_constraintTop_toTopOf="parent" />
-
-    <TextView
-        android:id="@+id/currentCommand"
-        android:layout_width="149dp"
-        android:layout_height="44dp"
-        android:text="None"
-        android:textSize="24dp"
-        android:textAlignment="center"
-        app:layout_constraintBottom_toTopOf="@id/textView"
-        app:layout_constraintLeft_toLeftOf="parent"
-        app:layout_constraintRight_toRightOf="parent"
-    />
-    <TextView
-        android:id="@+id/previousCommand"
-        android:layout_width="149dp"
-        android:layout_height="44dp"
-        android:text="None"
-        android:textSize="24dp"
-        android:textAlignment="center"
-        app:layout_constraintBottom_toTopOf="@id/currentCommand"
-        app:layout_constraintLeft_toLeftOf="parent"
-        app:layout_constraintRight_toRightOf="parent"
-    />
+        app:layout_constraintTop_toTopOf="@+id/list_view" />
 
     <Button
         android:id="@+id/quit"
@@ -50,5 +27,15 @@
         app:layout_constraintRight_toRightOf="parent"
         />
 
+    <ListView
+        android:id="@+id/list_view"
+        android:layout_width="240dp"
+        android:layout_height="wrap_content"
+        app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintLeft_toLeftOf="parent"
+        app:layout_constraintRight_toRightOf="parent"
+        app:layout_constraintTop_toTopOf="parent"
+        android:background="@drawable/border"
+        />
 
 </android.support.constraint.ConstraintLayout>

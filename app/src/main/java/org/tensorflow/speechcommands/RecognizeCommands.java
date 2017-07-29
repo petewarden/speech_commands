@@ -148,7 +148,6 @@ public class RecognizeCommands {
         }
         boolean isNewCommand;
         if ((currentTopScore > mDetectionThreshold) &&
-                (!currentTopLabel.equals(mPreviousTopLabel)) &&
                 (timeSinceLastTop > mSuppressionMS)) {
             mPreviousTopLabel = currentTopLabel;
             mPreviousTopLabelTime = currentTimeMS;

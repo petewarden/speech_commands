@@ -1,5 +1,7 @@
 package org.tensorflow.speechcommands;
 
+import android.animation.ValueAnimator;
+import android.content.Context;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.media.AudioFormat;
@@ -14,8 +16,13 @@ import android.support.v7.app.AppCompatActivity;
 import android.os.Bundle;
 import android.support.design.widget.Snackbar;
 import android.util.Log;
+import android.view.LayoutInflater;
 import android.view.View;
+import android.view.ViewGroup;
+import android.view.animation.CycleInterpolator;
+import android.widget.ArrayAdapter;
 import android.widget.Button;
+import android.widget.ListView;
 import android.widget.TextView;
 import org.tensorflow.contrib.android.TensorFlowInferenceInterface;
 
@@ -28,38 +35,57 @@ import java.io.InputStreamReader;
 import java.nio.ByteBuffer;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.Iterator;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantLock;
 
 import static java.lang.Math.min;
 
+class AnimatedAdapter extends ArrayAdapter<String> {
+    public  Map<String, TextView> mLabelToView = new HashMap<>();
+    public AnimatedAdapter(Context context, List<String> list) {
+        super(context, 0, list);
+    }
+
+    @Override
+    public View getView(final int position, View convertView, ViewGroup parent) {
+        String item = getItem(position);
+        if (convertView == null) {
+            convertView = LayoutInflater.from(getContext()).inflate(R.layout.list_text_item, parent, false);
+        }
+        TextView label = (TextView) convertView.findViewById(R.id.list_text_item);
+        label.setText(item);
+        mLabelToView.put(item.toLowerCase(), label);
+        return convertView;
+    }
+}
+
 public class MainActivity extends AppCompatActivity {
 
     private static final int SAMPLE_RATE = 16000;
-    private static final int SAMPLE_DURATION_MS = 2000;
+    private static final int SAMPLE_DURATION_MS = 1000;
     private static final int RECORDING_LENGTH = (int) (SAMPLE_RATE * SAMPLE_DURATION_MS / 1000);
     private static final long AVERAGE_WINDOW_DURATION_MS = 500;
     private static float DETECTION_THRESHOLD=0.70f;
     private static int SUPPRESSION_MS = 1500;
     private static int MINIMUM_COUNT = 3;
     private static long MINIMUM_TIME_BETWEEN_SAMPLES_MS = 30;
-    private static String LABEL_FILENAME = "file:///android_asset/low_latency_conv_labels.txt";
-    private static String MODEL_FILENAME = "file:///android_asset/conv_v1_frozen.pb";
+    private static String LABEL_FILENAME = "file:///android_asset/conv_actions_labels.txt";
+    private static String MODEL_FILENAME = "file:///android_asset/conv_actions_frozen.pb";
     private static String INPUT_DATA_NAME = "decoded_sample_data:0";
     private static String SAMPLE_RATE_NAME = "decoded_sample_data:1";
     private static String OUTPUT_SCORES_NAME = "labels_softmax";
 
     private static final int REQUEST_RECORD_AUDIO = 13;
     private TextView mInfo;
-    private TextView mCurrentCommand;
-    private TextView mPreviousCommand;
     private Button mQuitButton;
+    private ListView mLabelsListView;
     private static final String LOG_TAG = MainActivity.class.getSimpleName();
 
     short[] mRecordingBuffer = new short[RECORDING_LENGTH];
-    short[] mSpeechInput = new short[RECORDING_LENGTH];
     int mRecordingOffset = 0;
     boolean mShouldContinue = true;
     private Thread mRecordingThread;
@@ -68,11 +94,8 @@ public class MainActivity extends AppCompatActivity {
     private final ReentrantLock mRecordingBufferLock = new ReentrantLock();
     private TensorFlowInferenceInterface mInferenceInterface;
     private List<String> mLabels = new ArrayList<String>();
-    private class RecognitionResult {
-        public ArrayList<Float> mResults = new ArrayList<>();
-        public long mCaptureTime;
-    }
-    private ArrayDeque<RecognitionResult> mRecognitionResults = new ArrayDeque<>();
+    private List<String> mDisplayedLabels = new ArrayList<>();
+    private AnimatedAdapter mAnimatedAdapter = null;
     private RecognizeCommands mRecognizeCommands = null;
 
     @Override
@@ -81,8 +104,6 @@ public class MainActivity extends AppCompatActivity {
         setContentView(R.layout.activity_main);
 
         mInfo = (TextView) findViewById(R.id.textView);
-        mCurrentCommand = (TextView) findViewById(R.id.currentCommand);
-        mPreviousCommand = (TextView) findViewById(R.id.previousCommand);
         mQuitButton = (Button) findViewById(R.id.quit);
         mQuitButton.setOnClickListener(new View.OnClickListener() {
             @Override
@@ -92,6 +113,8 @@ public class MainActivity extends AppCompatActivity {
                 System.exit(1);
             }
         });
+        mLabelsListView = (ListView) findViewById(R.id.list_view);
+        getSupportActionBar().setTitle("Say one of the words below!");
 
         String actualFilename = LABEL_FILENAME.split("file:///android_asset/")[1];
         Log.i(LOG_TAG, "Reading labels from: " + actualFilename);
@@ -101,11 +124,16 @@ public class MainActivity extends AppCompatActivity {
             String line;
             while ((line = br.readLine()) != null) {
                 mLabels.add(line);
+                if (line.charAt(0) != '_') {
+                    mDisplayedLabels.add(line.substring(0, 1).toUpperCase() + line.substring(1));
+                }
             }
             br.close();
         } catch (IOException e) {
             throw new RuntimeException("Problem reading label file!" , e);
         }
+        mAnimatedAdapter = new AnimatedAdapter(this, mDisplayedLabels);
+        mLabelsListView.setAdapter(mAnimatedAdapter);
 
         mRecognizeCommands = new RecognizeCommands(mLabels, AVERAGE_WINDOW_DURATION_MS,
                 DETECTION_THRESHOLD, SUPPRESSION_MS, MINIMUM_COUNT, MINIMUM_TIME_BETWEEN_SAMPLES_MS);
@@ -267,72 +295,37 @@ public class MainActivity extends AppCompatActivity {
             mInferenceInterface.fetch(OUTPUT_SCORES_NAME, outputScores);
 
             long currentTime = System.currentTimeMillis();
-            String localLabelOutput;
-            String localLabelOnly;
-            if (false) {
-                RecognitionResult recognitionResult = new RecognitionResult();
-                for (int i = 0; i < mLabels.size(); ++i) {
-                    recognitionResult.mResults.add(outputScores[i]);
-                }
-                recognitionResult.mCaptureTime = currentTime;
-                mRecognitionResults.addFirst(recognitionResult);
+            final RecognizeCommands.RecognitionResult result = mRecognizeCommands.processLatestResults(outputScores, currentTime);
 
-                while (true) {
-                    RecognitionResult oldResult = mRecognitionResults.peekLast();
-                    long age = currentTime - oldResult.mCaptureTime;
-                    if (age > AVERAGE_WINDOW_DURATION_MS) {
-                        mRecognitionResults.removeLast();
-                    } else {
-                        break;
-                    }
-                }
-
-                ArrayList<Float> averageScores = new ArrayList<Float>();
-                for (int i = 0; i < mLabels.size(); ++i) {
-                    averageScores.add(0.0f);
-                }
-                for (Iterator<RecognitionResult> itr = mRecognitionResults.iterator(); itr.hasNext(); ) {
-                    RecognitionResult result = itr.next();
-                    for (int i = 0; i < result.mResults.size(); ++i) {
-                        float oldAverage = averageScores.get(i);
-                        averageScores.set(i, oldAverage + result.mResults.get(i) / mRecognitionResults.size());
-                    }
-                }
-
-                float topScore = 0.0f;
-                String topLabel = "";
-                for (int i = 0; i < mLabels.size(); ++i) {
-                    if (averageScores.get(i) > topScore) {
-                        topScore = averageScores.get(i);
-                        topLabel = mLabels.get(i);
-                    }
-                }
-                localLabelOutput = topLabel + ":" + topScore;
-                localLabelOnly = topLabel;
-            } else {
-                RecognizeCommands.RecognitionResult result = mRecognizeCommands.processLatestResults(outputScores, currentTime);
-                if (result.mIsNewCommand) {
-                    localLabelOutput = result.mFoundCommand + ":" + result.mScore;
-                    localLabelOnly = result.mFoundCommand;
-                } else {
-                    localLabelOutput = result.mFoundCommand + ":" + result.mScore;
-                    localLabelOnly = "_silence_";
-                }
-            }
-            final String labelOutput = localLabelOutput;
-            final String labelOnly = localLabelOnly;
-            //Log.v(LOG_TAG, labelOutput);
             runOnUiThread(new Runnable() {
                 @Override
                 public void run() {
-                    mInfo.setText(labelOutput);
-                    String oldCurrent = mCurrentCommand.getText().toString();
-                    if ((labelOnly.charAt(0) != '_') && (!oldCurrent.equals(labelOnly))) {
-                        mCurrentCommand.setText(labelOnly);
-                        mPreviousCommand.setText(oldCurrent);
+                    mInfo.setText("");
+                    if ((result.mFoundCommand.charAt(0) != '_') && result.mIsNewCommand) {
+                        int labelIndex = -1;
+                        for (int i = 0; i < mLabels.size(); ++i) {
+                          if (mLabels.get(i).equals(result.mFoundCommand)) {
+                              labelIndex = i;
+                          }
+                        }
+                        final View labelView = (View) mLabelsListView.getChildAt(labelIndex - 2);
+                        ValueAnimator colorAnimation = ValueAnimator.ofArgb(0x00b3ccff, 0xffb3ccff, 0x00b3ccff);
+                        colorAnimation.setDuration(750);
+                        colorAnimation.addUpdateListener(new ValueAnimator.AnimatorUpdateListener() {
+                            @Override
+                            public void onAnimationUpdate(ValueAnimator animator) {
+                                labelView.setBackgroundColor((int) animator.getAnimatedValue());
+                            }
+                        });
+                        colorAnimation.start();
                     }
                 }
             });
+            try {
+                Thread.sleep(30);
+            } catch (InterruptedException e) {
+                // Ignore
+            }
         }
 
         Log.v(LOG_TAG, "End recognition");
